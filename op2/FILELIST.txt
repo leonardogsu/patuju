@@ -1,0 +1,26 @@
+=== PROYECTO WORDPRESS MULTI-SITE AUTOMATIZADO ===
+
+Archivos del proyecto:
+
+.
+./.env.example
+./.gitignore
+./CHANGELOG.md
+./FILELIST.txt
+./INFO.txt
+./LICENSE
+./QUICKSTART.md
+./README.md
+./auto-install.sh
+./check-system.sh
+./scripts
+./scripts/backup.sh
+./scripts/generate-config.sh
+./scripts/install.sh
+./scripts/manage.sh
+./scripts/setup-ssl.sh
+./scripts/setup.sh
+./scripts/uninstall.sh
+
+Total de archivos:
+17

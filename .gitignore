@@ -1,5 +1,5 @@
 # Variables de entorno
-.env
+op1/.env
 
 # WordPress
 www/*/wp-config.php
@@ -9,7 +9,7 @@ www/*/wp-content/upgrade/
 www/*/wp-content/backups/
 
 # MySQL
-mysql/data/
+op1/mysql/data/
 
 # Logs
 logs/

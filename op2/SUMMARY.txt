@@ -1,0 +1,27 @@
+=== PROYECTO COMPLETO ===
+
+Total de archivos creados:
+19
+
+Tamaño total del proyecto:
+133K	.
+
+Archivos principales:
+CHANGELOG.md - 5.2K
+CONTRIBUTING.md - 7.6K
+FILELIST.txt - 409
+INFO.txt - 3.0K
+QUICKSTART.md - 2.2K
+README.md - 12K
+SUMMARY.txt - 116
+auto-install.sh - 22K
+check-system.sh - 6.6K
+
+Scripts:
+scripts/backup.sh - 6.0K
+scripts/generate-config.sh - 12K
+scripts/install.sh - 13K
+scripts/manage.sh - 20K
+scripts/setup-ssl.sh - 5.1K
+scripts/setup.sh - 6.8K
+scripts/uninstall.sh - 6.4K
