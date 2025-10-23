@@ -2,7 +2,7 @@
 
 ################################################################################
 # Script para generar todas las configuraciones del proyecto
-# VERSIÓN ACTUALIZADA - Con reverse proxy y autenticación para phpMyAdmin
+# VERSIÓN ACTUALIZADA - Sin comentarios descriptivos en bloque HTTPS
 ################################################################################
 
 set -e
@@ -299,18 +299,15 @@ for i in "${!DOMAINS[@]}"; do
     log "  Generando configuración para $DOMAIN (sitio $SITE_NUM)"
 
     cat > "nginx/conf.d/${DOMAIN}.conf" << VHOSTEOF
-# Configuración para $DOMAIN
 server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN www.$DOMAIN;
 
-    # Certbot challenge
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
 
-    # Redirigir a HTTPS (descomentar después de obtener SSL)
     # return 301 https://\$server_name\$request_uri;
 
     root /var/www/html/sitio$SITE_NUM;
@@ -321,7 +318,6 @@ VHOSTEOF
     # Añadir configuración de phpMyAdmin si está habilitado
     if [ "$PHPMYADMIN_ENABLED" = true ]; then
         cat >> "nginx/conf.d/${DOMAIN}.conf" << 'PHPMYADMINLOC'
-    # phpMyAdmin reverse proxy con autenticación
     location ^~ /phpmyadmin/ {
         auth_basic "Acceso Restringido - phpMyAdmin";
         auth_basic_user_file /etc/nginx/auth/.htpasswd;
@@ -334,13 +330,11 @@ VHOSTEOF
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_redirect off;
 
-        # Aumentar timeouts para operaciones largas
         proxy_read_timeout 300;
         proxy_connect_timeout 300;
         proxy_send_timeout 300;
     }
 
-    # Redirigir /phpmyadmin a /phpmyadmin/
     location = /phpmyadmin {
         return 301 /phpmyadmin/;
     }
@@ -384,10 +378,10 @@ PHPMYADMINLOC
     }
 }
 
-# HTTPS configuration (descomentar después de obtener SSL)
 # server {
-#     listen 443 ssl http2;
-#     listen [::]:443 ssl http2;
+#     listen 443 ssl;
+#     listen [::]:443 ssl;
+#     http2 on;
 #     server_name $DOMAIN www.$DOMAIN;
 #
 #     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
@@ -404,7 +398,6 @@ VHOSTEOF2
     # Añadir configuración de phpMyAdmin para HTTPS si está habilitado
     if [ "$PHPMYADMIN_ENABLED" = true ]; then
         cat >> "nginx/conf.d/${DOMAIN}.conf" << 'PHPMYADMINLOCHTTPS'
-#     # phpMyAdmin reverse proxy con autenticación
 #     location ^~ /phpmyadmin/ {
 #         auth_basic "Acceso Restringido - phpMyAdmin";
 #         auth_basic_user_file /etc/nginx/auth/.htpasswd;

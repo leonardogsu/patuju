@@ -631,6 +631,17 @@ banner "  PASO 11: Generación de archivos de configuración"
 banner "═══════════════════════════════════════════════════════════════════════"
 echo ""
 
+# Limpiar configuraciones antiguas de Nginx si existen
+if [ -d "nginx/conf.d" ]; then
+    if ls nginx/conf.d/*.conf 1> /dev/null 2>&1; then
+        log "Limpiando archivos de configuración antiguos de Nginx..."
+        rm -f nginx/conf.d/*.conf 2>/dev/null || true
+        rm -f nginx/conf.d/*.backup* 2>/dev/null || true
+        success "✓ Configuraciones antiguas eliminadas"
+    fi
+fi
+
+
 log "Ejecutando generador de configuraciones..."
 ./scripts/generate-config.sh || error "Error al generar configuraciones"
 success "✓ Configuraciones generadas"
