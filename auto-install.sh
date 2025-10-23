@@ -252,32 +252,35 @@ if command -v docker &> /dev/null; then
     success "✓ Docker ya está instalado: $(docker --version)"
 else
     log "Instalando Docker..."
-    
-    # Añadir repositorio de Docker
+
+    # Añadir la GPG key oficial de Docker
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
     chmod a+r /etc/apt/keyrings/docker.asc
-    
+
+    # Añadir el repositorio
     echo \
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
       $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
       tee /etc/apt/sources.list.d/docker.list > /dev/null
-    
+
     apt-get update -qq >> "$LOG_FILE" 2>&1
-    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
-        >> "$LOG_FILE" 2>&1 || error "Error al instalar Docker"
-    
-    systemctl enable docker >> "$LOG_FILE" 2>&1
-    systemctl start docker >> "$LOG_FILE" 2>&1
-    
+    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >> "$LOG_FILE" 2>&1 || error "Error al instalar Docker"
+
     success "✓ Docker instalado: $(docker --version)"
 fi
 
+# Verificar Docker Compose
 if docker compose version &> /dev/null; then
-    success "✓ Docker Compose disponible: $(docker compose version --short)"
+    success "✓ Docker Compose: $(docker compose version)"
 else
     error "Docker Compose no está disponible"
 fi
+
+# Iniciar Docker
+systemctl enable docker >> "$LOG_FILE" 2>&1
+systemctl start docker >> "$LOG_FILE" 2>&1
+success "✓ Servicio Docker iniciado"
 
 echo ""
 sleep 2
@@ -331,11 +334,165 @@ echo ""
 sleep 2
 
 ################################################################################
-# ⚠️ VERIFICAR SI EXISTE UN VOLUMEN DE MYSQL PREVIO
+# 7. LIMPIEZA DE VOLÚMENES Y CONTENEDORES ANTIGUOS DE WORDPRESS
 ################################################################################
 
 banner "═══════════════════════════════════════════════════════════════════════"
-banner "  VERIFICACIÓN DE VOLUMEN DE DATOS MYSQL EXISTENTE"
+banner "  PASO 7: Detección y limpieza de instalaciones anteriores"
+banner "═══════════════════════════════════════════════════════════════════════"
+echo ""
+
+FOUND_OLD_DATA=false
+
+# Detectar contenedores relacionados con WordPress
+log "Buscando contenedores antiguos de WordPress/MySQL/Nginx..."
+OLD_CONTAINERS=$(docker ps -a --filter "name=nginx" --filter "name=mysql" --filter "name=php" --filter "name=wordpress" --filter "name=phpmyadmin" --filter "name=certbot" --filter "name=ftp" --format "{{.Names}}" 2>/dev/null || true)
+
+if [ -n "$OLD_CONTAINERS" ]; then
+    FOUND_OLD_DATA=true
+    warning "Se encontraron contenedores antiguos:"
+    echo "$OLD_CONTAINERS" | while read container; do
+        echo "  - $container"
+    done
+    echo ""
+fi
+
+# Detectar volúmenes de Docker
+log "Buscando volúmenes de Docker antiguos..."
+OLD_VOLUMES=$(docker volume ls --filter "name=mysql" --filter "name=wordpress" --filter "name=wp" --format "{{.Name}}" 2>/dev/null || true)
+
+if [ -n "$OLD_VOLUMES" ]; then
+    FOUND_OLD_DATA=true
+    warning "Se encontraron volúmenes de Docker antiguos:"
+    echo "$OLD_VOLUMES" | while read volume; do
+        echo "  - $volume"
+    done
+    echo ""
+fi
+
+# Detectar directorios de datos antiguos
+log "Buscando directorios de datos antiguos..."
+OLD_DIRS=()
+
+if [ -d "$INSTALL_DIR/www" ] && [ "$(ls -A $INSTALL_DIR/www 2>/dev/null)" ]; then
+    OLD_DIRS+=("$INSTALL_DIR/www")
+fi
+
+if [ -d "$INSTALL_DIR/mysql/data" ] && [ "$(ls -A $INSTALL_DIR/mysql/data 2>/dev/null)" ]; then
+    OLD_DIRS+=("$INSTALL_DIR/mysql/data")
+fi
+
+if [ ${#OLD_DIRS[@]} -gt 0 ]; then
+    FOUND_OLD_DATA=true
+    warning "Se encontraron directorios con datos antiguos:"
+    for dir in "${OLD_DIRS[@]}"; do
+        echo "  - $dir"
+    done
+    echo ""
+fi
+
+# Detectar redes de Docker
+log "Buscando redes de Docker antiguas..."
+OLD_NETWORKS=$(docker network ls --filter "name=wordpress" --filter "name=wp" --format "{{.Name}}" 2>/dev/null | grep -v "bridge\|host\|none" || true)
+
+if [ -n "$OLD_NETWORKS" ]; then
+    FOUND_OLD_DATA=true
+    warning "Se encontraron redes de Docker antiguas:"
+    echo "$OLD_NETWORKS" | while read network; do
+        echo "  - $network"
+    done
+    echo ""
+fi
+
+# Si se encontró algo, preguntar al usuario
+if [ "$FOUND_OLD_DATA" = true ]; then
+    warning "╔═══════════════════════════════════════════════════════════════╗"
+    warning "║  ATENCIÓN: Se detectaron instalaciones previas de WordPress  ║"
+    warning "╚═══════════════════════════════════════════════════════════════╝"
+    echo ""
+    warning "Para garantizar una instalación limpia, se recomienda eliminar todos"
+    warning "los contenedores, volúmenes y datos antiguos."
+    echo ""
+    warning "⚠️  ESTA ACCIÓN ES IRREVERSIBLE ⚠️"
+    warning "Se perderán todos los datos, bases de datos y archivos antiguos."
+    echo ""
+    read -p "¿Deseas eliminar TODAS las instalaciones antiguas y empezar de cero? (s/n): " confirm_cleanup
+
+    if [[ $confirm_cleanup =~ ^[Ss]$ ]]; then
+        log "Iniciando limpieza completa..."
+        echo ""
+
+        # Detener y eliminar contenedores
+        if [ -n "$OLD_CONTAINERS" ]; then
+            log "Deteniendo contenedores antiguos..."
+            echo "$OLD_CONTAINERS" | while read container; do
+                docker stop "$container" >> "$LOG_FILE" 2>&1 || true
+                info "  ✓ Detenido: $container"
+            done
+
+            log "Eliminando contenedores antiguos..."
+            echo "$OLD_CONTAINERS" | while read container; do
+                docker rm -f "$container" >> "$LOG_FILE" 2>&1 || true
+                info "  ✓ Eliminado: $container"
+            done
+        fi
+
+        # Eliminar volúmenes de Docker
+        if [ -n "$OLD_VOLUMES" ]; then
+            log "Eliminando volúmenes de Docker antiguos..."
+            echo "$OLD_VOLUMES" | while read volume; do
+                docker volume rm "$volume" >> "$LOG_FILE" 2>&1 || true
+                info "  ✓ Eliminado volumen: $volume"
+            done
+        fi
+
+        # Eliminar directorios de datos
+        if [ ${#OLD_DIRS[@]} -gt 0 ]; then
+            log "Eliminando directorios de datos antiguos..."
+            for dir in "${OLD_DIRS[@]}"; do
+                rm -rf "$dir"/* >> "$LOG_FILE" 2>&1 || true
+                info "  ✓ Limpiado: $dir"
+            done
+        fi
+
+        # Eliminar redes de Docker
+        if [ -n "$OLD_NETWORKS" ]; then
+            log "Eliminando redes de Docker antiguas..."
+            echo "$OLD_NETWORKS" | while read network; do
+                docker network rm "$network" >> "$LOG_FILE" 2>&1 || true
+                info "  ✓ Eliminada red: $network"
+            done
+        fi
+
+        # Limpieza adicional de Docker
+        log "Ejecutando limpieza general de Docker..."
+        docker system prune -f >> "$LOG_FILE" 2>&1 || true
+
+        success "✅ Limpieza completa finalizada"
+        success "El sistema está listo para una instalación completamente nueva"
+    else
+        warning "⚠️  ATENCIÓN: Se detectaron instalaciones previas pero no se eliminaron"
+        warning "Esto puede causar conflictos durante la instalación."
+        echo ""
+        read -p "¿Deseas continuar de todos modos? (s/n): " continue_anyway
+        if [[ ! $continue_anyway =~ ^[Ss]$ ]]; then
+            error "Instalación cancelada por el usuario"
+        fi
+    fi
+else
+    success "✓ No se detectaron instalaciones previas"
+    success "Sistema listo para instalación limpia"
+fi
+
+echo ""
+sleep 2
+
+################################################################################
+# 8. VERIFICACIÓN DE VOLUMEN DE DATOS MYSQL EXISTENTE
+################################################################################
+
+banner "═══════════════════════════════════════════════════════════════════════"
+banner "  PASO 8: Verificación de volumen de datos MySQL"
 banner "═══════════════════════════════════════════════════════════════════════"
 echo ""
 
@@ -369,7 +526,7 @@ if [ -d "$MYSQL_DATA_DIR" ] && [ "$(ls -A $MYSQL_DATA_DIR 2>/dev/null)" ]; then
         fi
     fi
 else
-    success "No se detectó volumen de MySQL previo. Continuando instalación..."
+    success "✓ No se detectó volumen de MySQL previo. Continuando instalación..."
 fi
 
 echo ""
@@ -377,11 +534,11 @@ sleep 2
 
 
 ################################################################################
-# 7. GENERACIÓN DE CREDENCIALES
+# 9. GENERACIÓN DE CREDENCIALES
 ################################################################################
 
 banner "═══════════════════════════════════════════════════════════════════════"
-banner "  PASO 7: Generación de credenciales seguras"
+banner "  PASO 9: Generación de credenciales seguras"
 banner "═══════════════════════════════════════════════════════════════════════"
 echo ""
 
@@ -442,11 +599,11 @@ echo ""
 sleep 2
 
 ################################################################################
-# 8. COPIAR SCRIPTS AL PROYECTO
+# 10. COPIAR SCRIPTS AL PROYECTO
 ################################################################################
 
 banner "═══════════════════════════════════════════════════════════════════════"
-banner "  PASO 8: Instalación de scripts de gestión"
+banner "  PASO 10: Instalación de scripts de gestión"
 banner "═══════════════════════════════════════════════════════════════════════"
 echo ""
 
@@ -466,11 +623,11 @@ echo ""
 sleep 2
 
 ################################################################################
-# 9. GENERAR CONFIGURACIONES
+# 11. GENERAR CONFIGURACIONES
 ################################################################################
 
 banner "═══════════════════════════════════════════════════════════════════════"
-banner "  PASO 9: Generación de archivos de configuración"
+banner "  PASO 11: Generación de archivos de configuración"
 banner "═══════════════════════════════════════════════════════════════════════"
 echo ""
 
@@ -482,11 +639,11 @@ echo ""
 sleep 2
 
 ################################################################################
-# 10. INSTALACIÓN DE WORDPRESS
+# 12. INSTALACIÓN DE WORDPRESS
 ################################################################################
 
 banner "═══════════════════════════════════════════════════════════════════════"
-banner "  PASO 10: Descarga e instalación de WordPress"
+banner "  PASO 12: Descarga e instalación de WordPress"
 banner "═══════════════════════════════════════════════════════════════════════"
 echo ""
 
@@ -498,26 +655,26 @@ echo ""
 sleep 2
 
 ################################################################################
-# 11. CONFIGURAR BACKUP AUTOMÁTICO (OPCIONAL)
+# 13. CONFIGURAR BACKUP AUTOMÁTICO (OPCIONAL)
 ################################################################################
 
 if [[ $SETUP_CRON == true ]]; then
     banner "═══════════════════════════════════════════════════════════════════════"
-    banner "  PASO 11: Configuración de backup automático"
+    banner "  PASO 13: Configuración de backup automático"
     banner "═══════════════════════════════════════════════════════════════════════"
     echo ""
-    
+
     log "Configurando cron para backup diario..."
     CRON_CMD="0 2 * * * cd $INSTALL_DIR && ./scripts/backup.sh >> $INSTALL_DIR/logs/backup.log 2>&1"
     (crontab -l 2>/dev/null | grep -v "backup.sh"; echo "$CRON_CMD") | crontab -
     success "✓ Backup automático configurado (diario a las 2:00 AM)"
-    
+
     echo ""
     sleep 2
 fi
 
 ################################################################################
-# 12. RESUMEN FINAL
+# 14. RESUMEN FINAL
 ################################################################################
 
 clear

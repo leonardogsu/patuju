@@ -2,6 +2,7 @@
 
 ################################################################################
 # Script para generar todas las configuraciones del proyecto
+# VERSIÓN CORREGIDA - Resuelve problemas de conexión a base de datos
 ################################################################################
 
 set -e
@@ -72,17 +73,17 @@ services:
       WORDPRESS_DB_HOST: mysql
       WORDPRESS_DB_USER: wpuser
       WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
-      WORDPRESS_DB_NAME: wordpress
     networks:
       - wordpress-network
     restart: unless-stopped
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
 
   mysql:
     image: mysql:8.0
     container_name: mysql
-    command: --default-authentication-plugin=mysql_native_password --upgrade=FORCE
+    command: --default-authentication-plugin=mysql_native_password
     volumes:
       - ./mysql/data:/var/lib/mysql
       - ./mysql/init:/docker-entrypoint-initdb.d:ro
@@ -91,10 +92,15 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_USER: wpuser
       MYSQL_PASSWORD: ${DB_PASSWORD}
-      MYSQL_DATABASE: wordpress
     networks:
       - wordpress-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
 
   certbot:
     image: certbot/certbot:latest
@@ -204,9 +210,9 @@ http {
     gzip_vary on;
     gzip_proxied any;
     gzip_comp_level 6;
-    gzip_types text/plain text/css text/xml text/javascript 
-               application/json application/javascript application/xml+rss 
-               application/rss+xml font/truetype font/opentype 
+    gzip_types text/plain text/css text/xml text/javascript
+               application/json application/javascript application/xml+rss
+               application/rss+xml font/truetype font/opentype
                application/vnd.ms-fontobject image/svg+xml;
 
     # Security headers
@@ -233,24 +239,24 @@ DOMAINS=($(grep "^DOMAIN_" .env | cut -d'=' -f2))
 for i in "${!DOMAINS[@]}"; do
     DOMAIN="${DOMAINS[$i]}"
     SITE_NUM=$((i + 1))
-    
+
     log "  Generando configuración para $DOMAIN (sitio $SITE_NUM)"
-    
+
     cat > "nginx/conf.d/${DOMAIN}.conf" << VHOSTEOF
 # Configuración para $DOMAIN
 server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN www.$DOMAIN;
-    
+
     # Certbot challenge
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
-    
+
     # Redirigir a HTTPS (descomentar después de obtener SSL)
     # return 301 https://\$server_name\$request_uri;
-    
+
     root /var/www/html/sitio$SITE_NUM;
     index index.php index.html index.htm;
 
@@ -294,7 +300,7 @@ server {
 #     listen 443 ssl http2;
 #     listen [::]:443 ssl http2;
 #     server_name $DOMAIN www.$DOMAIN;
-# 
+#
 #     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
 #     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
 #     ssl_protocols TLSv1.2 TLSv1.3;
