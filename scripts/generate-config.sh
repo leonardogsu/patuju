@@ -41,12 +41,10 @@ error() {
 log "Generando docker-compose.yml..."
 
 cat > docker-compose.yml << 'DOCKERCOMPOSE'
-version: '3.8'
-
 services:
   nginx:
     image: nginx:alpine
-    container_name: nginx-web
+    container_name: nginx
     ports:
       - "80:80"
       - "443:443"
@@ -65,7 +63,7 @@ services:
 
   php:
     image: wordpress:php8.2-fpm-alpine
-    container_name: php-fpm
+    container_name: php
     volumes:
       - ./www:/var/www/html
       - ./php/php.ini:/usr/local/etc/php/conf.d/custom.ini:ro
@@ -74,6 +72,7 @@ services:
       WORDPRESS_DB_HOST: mysql
       WORDPRESS_DB_USER: wpuser
       WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WORDPRESS_DB_NAME: wordpress
     networks:
       - wordpress-network
     restart: unless-stopped
@@ -82,8 +81,8 @@ services:
 
   mysql:
     image: mysql:8.0
-    container_name: mysql-db
-    command: --default-authentication-plugin=mysql_native_password
+    container_name: mysql
+    command: --default-authentication-plugin=mysql_native_password --upgrade=FORCE
     volumes:
       - ./mysql/data:/var/lib/mysql
       - ./mysql/init:/docker-entrypoint-initdb.d:ro
@@ -92,11 +91,10 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_USER: wpuser
       MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: wordpress
     networks:
       - wordpress-network
     restart: unless-stopped
-    security_opt:
-      - seccomp:unconfined
 
   certbot:
     image: certbot/certbot:latest
@@ -107,13 +105,6 @@ services:
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
     networks:
       - wordpress-network
-
-networks:
-  wordpress-network:
-    driver: bridge
-
-volumes:
-  mysql-data:
 DOCKERCOMPOSE
 
 # Añadir phpMyAdmin si está habilitado
@@ -129,6 +120,8 @@ if grep -q "INSTALL_PHPMYADMIN=true" .env 2>/dev/null; then
       PMA_USER: wpuser
       PMA_PASSWORD: ${DB_PASSWORD}
       UPLOAD_LIMIT: 100M
+    ports:
+      - "8080:80"
     networks:
       - wordpress-network
     restart: unless-stopped
@@ -143,7 +136,7 @@ if grep -q "INSTALL_FTP=true" .env 2>/dev/null; then
 
   ftp:
     image: delfer/alpine-ftp-server
-    container_name: ftp-server
+    container_name: ftp
     ports:
       - "21:21"
       - "21000-21010:21000-21010"
@@ -158,7 +151,18 @@ if grep -q "INSTALL_FTP=true" .env 2>/dev/null; then
 FTP
 fi
 
-log "docker-compose.yml generado"
+cat >> docker-compose.yml << 'DOCKEREND'
+
+networks:
+  wordpress-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
+DOCKEREND
+
+log "docker-compose.yml generado ✅"
+
 
 ################################################################################
 # 2. GENERAR CONFIGURACIÓN DE NGINX
@@ -391,11 +395,9 @@ cat > mysql/my.cnf << 'MYCNF'
 max_connections = 200
 max_allowed_packet = 64M
 innodb_buffer_pool_size = 512M
-innodb_log_file_size = 128M
+innodb_redo_log_capacity = 134217728
 innodb_flush_log_at_trx_commit = 2
 innodb_flush_method = O_DIRECT
-query_cache_size = 0
-query_cache_type = 0
 
 [mysqldump]
 quick

@@ -1,5 +1,5 @@
 # Variables de entorno
-op1/.env
+.env
 
 # WordPress
 www/*/wp-config.php

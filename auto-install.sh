@@ -8,6 +8,8 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Colores
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -329,6 +331,52 @@ echo ""
 sleep 2
 
 ################################################################################
+# ⚠️ VERIFICAR SI EXISTE UN VOLUMEN DE MYSQL PREVIO
+################################################################################
+
+banner "═══════════════════════════════════════════════════════════════════════"
+banner "  VERIFICACIÓN DE VOLUMEN DE DATOS MYSQL EXISTENTE"
+banner "═══════════════════════════════════════════════════════════════════════"
+echo ""
+
+MYSQL_DATA_DIR="$INSTALL_DIR/mysql/data"
+
+if [ -d "$MYSQL_DATA_DIR" ] && [ "$(ls -A $MYSQL_DATA_DIR 2>/dev/null)" ]; then
+    warning "Se ha detectado un volumen de datos MySQL existente en:"
+    echo "  $MYSQL_DATA_DIR"
+    echo ""
+    echo "Esto significa que:"
+    echo "  - MySQL ya tiene una contraseña root previa."
+    echo "  - Si continúas, la instalación puede fallar al no coincidir las credenciales."
+    echo ""
+    read -p "¿Deseas borrar el volumen de datos MySQL y reiniciar limpio? (s/n): " confirm_delete
+
+    if [[ $confirm_delete =~ ^[Ss]$ ]]; then
+        log "Deteniendo contenedores existentes (si los hay)..."
+        docker compose -f "$INSTALL_DIR/docker-compose.yml" down 2>/dev/null || true
+
+        log "Eliminando datos existentes de MySQL..."
+        rm -rf "$MYSQL_DATA_DIR"/*
+
+        success "✓ Volumen de datos MySQL eliminado correctamente"
+    else
+        warning "⚠️ ATENCIÓN: Se usará el volumen existente."
+        warning "Si la contraseña root no coincide, la instalación fallará."
+        echo ""
+        read -p "¿Deseas continuar de todos modos? (s/n): " continue_anyway
+        if [[ ! $continue_anyway =~ ^[Ss]$ ]]; then
+            error "Instalación cancelada por el usuario."
+        fi
+    fi
+else
+    success "No se detectó volumen de MySQL previo. Continuando instalación..."
+fi
+
+echo ""
+sleep 2
+
+
+################################################################################
 # 7. GENERACIÓN DE CREDENCIALES
 ################################################################################
 
@@ -383,8 +431,12 @@ for i in "${!DOMAINS[@]}"; do
     echo "DOMAIN_$((i+1))=${DOMAINS[$i]}" >> .env
 done
 
+# Ajustar permisos y propietario
+chown root:root .env        # o ubuntu:ubuntu si usas ese usuario
 chmod 600 .env
-success "✓ Archivo .env creado"
+
+success "✓ Archivo .env creado con permisos correctos"
+
 
 echo ""
 sleep 2
@@ -399,10 +451,10 @@ banner "════════════════════════
 echo ""
 
 # Copiar scripts desde el directorio actual al proyecto
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+pwd
 log "Copiando scripts..."
-cp "$SCRIPT_DIR"/{generate-config.sh,setup.sh,setup-ssl.sh,backup.sh} scripts/ 2>/dev/null || {
+cp "$SCRIPT_DIR"/scripts/{generate-config.sh,setup.sh,setup-ssl.sh,backup.sh} scripts/ 2>/dev/null || {
     warning "Scripts no encontrados en directorio actual, se crearán..."
     # Aquí deberías incluir los scripts inline o desde otro lugar
 }

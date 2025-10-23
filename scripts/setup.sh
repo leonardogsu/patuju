@@ -176,29 +176,41 @@ docker compose up -d || error "Error al iniciar contenedores"
 log "✓ Contenedores iniciados"
 
 ################################################################################
-# 5. ESPERAR A QUE MYSQL ESTÉ LISTO
+# 5. ESPERAR A QUE MYSQL ESTÉ LISTO (con espera inicial)
 ################################################################################
 
 log "Paso 5: Esperando a que MySQL esté listo..."
 
-max_attempts=30
+# Espera inicial para permitir que MySQL complete la inicialización
+log "Esperando 10 segundos para que MySQL complete la inicialización..."
+sleep 10
+
+max_attempts=60   # antes era 30
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do
+    log "DEBUG: Intento $((attempt+1)) de $max_attempts para conectar a MySQL..."
+
     if docker compose exec -T mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1" &>/dev/null; then
-        log "✓ MySQL está listo"
+        log "✅ MySQL está listo (conectado en el intento $((attempt+1)))"
         break
+    else
+        log "DEBUG: MySQL aún no responde. Reintentando en 2 segundos..."
     fi
+
     attempt=$((attempt + 1))
     echo -n "."
     sleep 2
 done
 
 if [ $attempt -eq $max_attempts ]; then
-    error "Timeout esperando a MySQL"
+    error "❌ Timeout esperando a MySQL después de $max_attempts intentos."
+    log "DEBUG: Verifica logs de MySQL con 'docker compose logs mysql' para más detalles."
 fi
 
 echo ""
+
+
 
 ################################################################################
 # 6. MOSTRAR INFORMACIÓN
