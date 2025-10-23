@@ -2,7 +2,7 @@
 
 ################################################################################
 # Script para generar todas las configuraciones del proyecto
-# VERSIÓN CORREGIDA - Resuelve problemas de conexión a base de datos
+# VERSIÓN ACTUALIZADA - Con reverse proxy y autenticación para phpMyAdmin
 ################################################################################
 
 set -e
@@ -34,6 +34,60 @@ error() {
     echo -e "${RED}[ERROR]${NC} $1"
     exit 1
 }
+
+warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+################################################################################
+# 0. GENERAR CREDENCIALES PARA PHPMYADMIN (SI ESTÁ HABILITADO)
+################################################################################
+
+PHPMYADMIN_ENABLED=false
+if grep -q "INSTALL_PHPMYADMIN=true" .env 2>/dev/null; then
+    PHPMYADMIN_ENABLED=true
+
+    log "Generando credenciales para phpMyAdmin..."
+
+    # Generar contraseña si no existe
+    if ! grep -q "^PHPMYADMIN_AUTH_USER=" .env 2>/dev/null; then
+        PHPMYADMIN_USER="phpmyadmin"
+        PHPMYADMIN_PASSWORD=$(pwgen -s 16 1)
+
+        # Añadir al .env
+        echo "" >> .env
+        echo "# phpMyAdmin Authentication" >> .env
+        echo "PHPMYADMIN_AUTH_USER=$PHPMYADMIN_USER" >> .env
+        echo "PHPMYADMIN_AUTH_PASSWORD=$PHPMYADMIN_PASSWORD" >> .env
+
+        info "  Usuario: $PHPMYADMIN_USER"
+        info "  Contraseña: $PHPMYADMIN_PASSWORD"
+    else
+        # Cargar credenciales existentes
+        PHPMYADMIN_USER=$(grep "^PHPMYADMIN_AUTH_USER=" .env | cut -d'=' -f2)
+        PHPMYADMIN_PASSWORD=$(grep "^PHPMYADMIN_AUTH_PASSWORD=" .env | cut -d'=' -f2)
+        info "  Usando credenciales existentes para: $PHPMYADMIN_USER"
+    fi
+
+    # Crear directorio para nginx auth
+    mkdir -p nginx/auth
+
+    # Generar archivo .htpasswd
+    log "Generando archivo .htpasswd..."
+
+    # Verificar si htpasswd está disponible
+    if ! command -v htpasswd &> /dev/null; then
+        warning "htpasswd no encontrado, instalando apache2-utils..."
+        apt-get update -qq
+        apt-get install -y -qq apache2-utils
+    fi
+
+    # Crear .htpasswd
+    htpasswd -bc nginx/auth/.htpasswd "$PHPMYADMIN_USER" "$PHPMYADMIN_PASSWORD"
+    chmod 644 nginx/auth/.htpasswd
+
+    log "✓ Credenciales de phpMyAdmin configuradas"
+fi
 
 ################################################################################
 # 1. GENERAR DOCKER-COMPOSE.YML
@@ -113,8 +167,14 @@ services:
       - wordpress-network
 DOCKERCOMPOSE
 
-# Añadir phpMyAdmin si está habilitado
-if grep -q "INSTALL_PHPMYADMIN=true" .env 2>/dev/null; then
+# Añadir volumen de autenticación si phpMyAdmin está habilitado
+if [ "$PHPMYADMIN_ENABLED" = true ]; then
+    # Añadir el volumen de auth a nginx
+    sed -i '/.*logs\/nginx:\/var\/log\/nginx/a\      - ./nginx/auth:/etc/nginx/auth:ro' docker-compose.yml
+fi
+
+# Añadir phpMyAdmin si está habilitado (SIN exponer puerto externo)
+if [ "$PHPMYADMIN_ENABLED" = true ]; then
     cat >> docker-compose.yml << 'PHPMYADMIN'
 
   phpmyadmin:
@@ -123,11 +183,7 @@ if grep -q "INSTALL_PHPMYADMIN=true" .env 2>/dev/null; then
     environment:
       PMA_HOST: mysql
       PMA_PORT: 3306
-      PMA_USER: wpuser
-      PMA_PASSWORD: ${DB_PASSWORD}
       UPLOAD_LIMIT: 100M
-    ports:
-      - "8080:80"
     networks:
       - wordpress-network
     restart: unless-stopped
@@ -260,8 +316,41 @@ server {
     root /var/www/html/sitio$SITE_NUM;
     index index.php index.html index.htm;
 
+VHOSTEOF
+
+    # Añadir configuración de phpMyAdmin si está habilitado
+    if [ "$PHPMYADMIN_ENABLED" = true ]; then
+        cat >> "nginx/conf.d/${DOMAIN}.conf" << 'PHPMYADMINLOC'
+    # phpMyAdmin reverse proxy con autenticación
+    location ^~ /phpmyadmin/ {
+        auth_basic "Acceso Restringido - phpMyAdmin";
+        auth_basic_user_file /etc/nginx/auth/.htpasswd;
+
+        rewrite ^/phpmyadmin/(.*) /$1 break;
+        proxy_pass http://phpmyadmin:80;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_redirect off;
+
+        # Aumentar timeouts para operaciones largas
+        proxy_read_timeout 300;
+        proxy_connect_timeout 300;
+        proxy_send_timeout 300;
+    }
+
+    # Redirigir /phpmyadmin a /phpmyadmin/
+    location = /phpmyadmin {
+        return 301 /phpmyadmin/;
+    }
+
+PHPMYADMINLOC
+    fi
+
+    cat >> "nginx/conf.d/${DOMAIN}.conf" << 'VHOSTEOF2'
     location / {
-        try_files \$uri \$uri/ /index.php?\$args;
+        try_files $uri $uri/ /index.php?$args;
     }
 
     location ~ \.php$ {
@@ -269,8 +358,8 @@ server {
         fastcgi_pass php:9000;
         fastcgi_index index.php;
         include fastcgi_params;
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        fastcgi_param PATH_INFO \$fastcgi_path_info;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
         fastcgi_read_timeout 300;
     }
 
@@ -310,8 +399,39 @@ server {
 #     root /var/www/html/sitio$SITE_NUM;
 #     index index.php index.html index.htm;
 #
+VHOSTEOF2
+
+    # Añadir configuración de phpMyAdmin para HTTPS si está habilitado
+    if [ "$PHPMYADMIN_ENABLED" = true ]; then
+        cat >> "nginx/conf.d/${DOMAIN}.conf" << 'PHPMYADMINLOCHTTPS'
+#     # phpMyAdmin reverse proxy con autenticación
+#     location ^~ /phpmyadmin/ {
+#         auth_basic "Acceso Restringido - phpMyAdmin";
+#         auth_basic_user_file /etc/nginx/auth/.htpasswd;
+#
+#         rewrite ^/phpmyadmin/(.*) /$1 break;
+#         proxy_pass http://phpmyadmin:80;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#         proxy_redirect off;
+#
+#         proxy_read_timeout 300;
+#         proxy_connect_timeout 300;
+#         proxy_send_timeout 300;
+#     }
+#
+#     location = /phpmyadmin {
+#         return 301 /phpmyadmin/;
+#     }
+#
+PHPMYADMINLOCHTTPS
+    fi
+
+    cat >> "nginx/conf.d/${DOMAIN}.conf" << 'VHOSTEOF3'
 #     location / {
-#         try_files \$uri \$uri/ /index.php?\$args;
+#         try_files $uri $uri/ /index.php?$args;
 #     }
 #
 #     location ~ \.php$ {
@@ -319,8 +439,8 @@ server {
 #         fastcgi_pass php:9000;
 #         fastcgi_index index.php;
 #         include fastcgi_params;
-#         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-#         fastcgi_param PATH_INFO \$fastcgi_path_info;
+#         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+#         fastcgi_param PATH_INFO $fastcgi_path_info;
 #         fastcgi_read_timeout 300;
 #     }
 #
@@ -344,7 +464,7 @@ server {
 #         log_not_found off;
 #     }
 # }
-VHOSTEOF
+VHOSTEOF3
 done
 
 log "Virtual hosts generados: ${#DOMAINS[@]} sitios"
@@ -468,6 +588,9 @@ backups/
 certbot/conf/
 certbot/www/
 
+# Nginx Auth
+nginx/auth/.htpasswd
+
 # Archivos temporales
 *.swp
 *.swo
@@ -486,5 +609,28 @@ Thumbs.db
 GITIGNORE
 
 log "✓ Todas las configuraciones han sido generadas exitosamente"
-log ""
+
+# Mostrar información de phpMyAdmin si está habilitado
+if [ "$PHPMYADMIN_ENABLED" = true ]; then
+    echo ""
+    info "═══════════════════════════════════════════════════════════"
+    info "PHPMYADMIN CONFIGURADO"
+    info "═══════════════════════════════════════════════════════════"
+    echo "  Acceso a través de cualquier dominio:"
+    for DOMAIN in "${DOMAINS[@]}"; do
+        echo "    http://$DOMAIN/phpmyadmin/"
+    done
+    echo ""
+    echo "  Credenciales de autenticación HTTP:"
+    echo "    Usuario: $PHPMYADMIN_USER"
+    echo "    Contraseña: $PHPMYADMIN_PASSWORD"
+    echo ""
+    echo "  Luego ingresa las credenciales de MySQL:"
+    echo "    Servidor: mysql"
+    echo "    Usuario: wpuser o root"
+    echo "    Contraseña: (la del .env)"
+    info "═══════════════════════════════════════════════════════════"
+fi
+
+echo ""
 log "Próximo paso: ./scripts/setup.sh para iniciar los contenedores"
