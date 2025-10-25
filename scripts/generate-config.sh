@@ -89,6 +89,20 @@ if grep -q "INSTALL_PHPMYADMIN=true" .env 2>/dev/null; then
     log "✓ Credenciales de phpMyAdmin configuradas"
 fi
 
+# Añadir PMA_ABSOLUTE_URI al .env si no existe
+    if ! grep -q "^PMA_ABSOLUTE_URI=" .env 2>/dev/null; then
+        # Obtener el primer dominio
+        FIRST_DOMAIN=$(grep "^DOMAIN_1=" .env | cut -d'=' -f2)
+        if [ -n "$FIRST_DOMAIN" ]; then
+            echo "" >> .env
+            echo "# phpMyAdmin Configuration" >> .env
+            echo "PMA_ABSOLUTE_URI=https://$FIRST_DOMAIN/phpmyadmin/" >> .env
+            log "  PMA_ABSOLUTE_URI añadido al .env"
+        fi
+    fi
+
+    log "✓ Credenciales de phpMyAdmin configuradas"
+
 ################################################################################
 # 1. GENERAR DOCKER-COMPOSE.YML
 ################################################################################
@@ -183,6 +197,7 @@ if [ "$PHPMYADMIN_ENABLED" = true ]; then
     environment:
       PMA_HOST: mysql
       PMA_PORT: 3306
+      PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI}
       UPLOAD_LIMIT: 100M
     networks:
       - wordpress-network
@@ -319,21 +334,26 @@ VHOSTEOF
     if [ "$PHPMYADMIN_ENABLED" = true ]; then
         cat >> "nginx/conf.d/${DOMAIN}.conf" << 'PHPMYADMINLOC'
     location ^~ /phpmyadmin/ {
-        auth_basic "Acceso Restringido - phpMyAdmin";
-        auth_basic_user_file /etc/nginx/auth/.htpasswd;
+            auth_basic "Acceso Restringido - phpMyAdmin";
+            auth_basic_user_file /etc/nginx/auth/.htpasswd;
 
-        rewrite ^/phpmyadmin/(.*) /$1 break;
-        proxy_pass http://phpmyadmin:80;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_redirect off;
+            proxy_pass http://phpmyadmin:80/;
 
-        proxy_read_timeout 300;
-        proxy_connect_timeout 300;
-        proxy_send_timeout 300;
-    }
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+            proxy_set_header X-Forwarded-Host \$host;
+            proxy_set_header X-Forwarded-Port \$server_port;
+
+            proxy_redirect ~^/(.*)\$ /phpmyadmin/\$1;
+
+            proxy_read_timeout 300;
+            proxy_connect_timeout 300;
+            proxy_send_timeout 300;
+
+            proxy_buffering off;
+        }
 
     location = /phpmyadmin {
         return 301 /phpmyadmin/;
